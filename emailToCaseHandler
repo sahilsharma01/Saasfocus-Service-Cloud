@@ -1,0 +1,444 @@
+// Class Used to capture email  and create custom case object case__c
+// --------------------------------------------------------------------------------------------- 
+// Version#     Date             Author                  Description
+// ---------------------------------------------------------------------------------------------
+// v1.0        07-01-2019       Sahil Sharma               Updated
+// ---------------------------------------------------------------------------------------------
+// in v1.1 Class Used to capture email from support.anz and create custom case object case__c
+// In v1.2 projects can have more than one domain names from email is sent to salesforce
+// email_sent_to field added on case__c to determine from which emailid  mail is forwarded from:support.anz,globalz@saasfocus,etc
+// these email id need to be added in org wide email address before using 
+// during case creation populate pm and TL email id
+// Email Loop issue fixed v1.3
+// First name last name new field gets value from email v1.3.1
+
+global class emailToCaseHandler implements Messaging.InboundEmailHandler {
+  global Messaging.InboundEmailResult handleInboundEmail(Messaging.InboundEmail email, Messaging.InboundEnvelope envelope)
+  {
+  /*
+    Messaging.InboundEmailResult result = new Messaging.InboundEmailresult();
+    string strMasterEmailBody = '';
+    string strTaskEmailBody = '';
+    integer intStartIndx = 0;
+    integer intLastIndx = 0;
+    string strSubject = email.Subject.abbreviate(254);
+    string caseNumber;
+
+    try
+    {
+      strMasterEmailBody = string.valueof(email.plainTextBody).abbreviate(131000);
+      strTaskEmailBody = string.valueof(email.plainTextBody).abbreviate(31600);
+    }
+    catch(exception e)
+    {
+      strMasterEmailBody = string.valueof(email.htmlBody).abbreviate(131000);
+      strTaskEmailBody = string.valueof(email.plainTextBody).abbreviate(31600);
+    }
+
+
+    if (strSubject.contains('CN-')) //it is a reply mail
+    {
+      integer startIndex = strSubject.indexOf('CN-');
+      caseNumber = strSubject.substring(startIndex, startIndex + 9);
+      System.debug('@@@caseNumber' + caseNumber);
+      List<Case__c> listCase = [Select name from case__c where name = :caseNumber];
+
+      if (listCase != Null)
+      {
+        //Note attachment = new Note();
+        //attachment.ParentId = listCase[0].ID;
+        //attachment.title = email.Subject;
+        //attachment.Body = email.plainTextBody;
+        //attachment.isPrivate = false;
+        //insert attachment;
+
+        task emailTask = new Task();
+
+        emailTask.Priority = 'Normal';
+        emailTask.Status = 'Not Started';
+        emailTask.Subject = 'New Mail  ::' + email.subject;
+        emailTask.WhatID = listCase[0].Id;
+        emailTask.Description = strTaskEmailBody;
+        System.debug('emailTask' + emailTask);
+        if (!Test.isRunningTest())
+        {
+          INSERT emailTask;
+        }
+
+        List<Attachment> attList = new List<Attachment> ();
+        try
+        {
+
+
+          // This will extract all blob attachments from email
+          // For text type attachment Messaging.Inboundemail.TextAttachment can be used
+          for (Messaging.Inboundemail.BinaryAttachment file : email.binaryAttachments)
+          {
+            Attachment attachment = new Attachment();
+            attachment.Name = file.fileName;
+            attachment.Body = file.body;
+            if (!Test.isRunningTest()) {
+              attachment.ParentId = emailTask.ID;
+            }
+            else
+            {
+              Task objTasktest = [select ID from task limit 1];
+              attachment.ParentId = objTasktest.ID;
+            }
+            attList.add(attachment);
+          }
+          if (attList.size() > 0)
+          {
+            if (!Test.isRunningTest())
+            {
+              insert attList;
+            }
+          }
+        }
+
+        catch(exception e)
+        {
+          System.debug('@@@Attachment failed' + attList);
+          System.debug('@@@reason' + e);
+
+        }
+        //System.debug('!@#$%^&' + emailTask.id);
+      }
+      return result;
+    }
+    else
+    //----------------------------------------------------------------------------------------------------------
+    //it is not a reply mail so create a new case
+    {
+      case__c objCase = new Case__c();
+      //parse domain name from email id
+      //query all project based on domain name field
+      string[] domainName = email.FromAddress.split('@');
+      domainName[1] = '%' + domainName[1] + '%';
+
+      // handle auto responce recursion and other situation which may lead to recursive emails
+      // 21/1/2016 added when a situation arises of recursive email by a autoresponce 
+      // version update to v 1.2 -> v 1.2.1
+
+      //
+      if (string.valueof(email).containsIgnoreCase('X-Autoreply: yes'))
+      {
+        System.debug('===========================AUTO REPLY EMAIL===========================');
+        return null;
+      }
+
+
+      else
+      {
+
+
+        if (domainName[1].contains('saasfocus') || domainName[1].contains('saasforce')) //DONT CREATE CASE IF SENDER IS FROM SAASFOCUS
+        {
+          // NOCASE IS CREATED
+        }
+        else
+        {
+          if (CheckEmailLoopingAndSpamming(Email.fromAddress, strSubject) == False)
+          {
+            return null;
+          }
+          else
+
+          {
+
+            List<Project__c> listProject = [Select Name, Contact__r.email, Tech_Lead__r.email From project__c where Domain_Names__c like :domainName[1] limit 1];
+            System.debug('@@@project' + listProject);
+            Project__c objProject;
+            if (listProject != null && listProject.size() > 0)
+            {
+              objProject = listProject[0];
+              System.debug('Project Name' + objProject.Name);
+              objCase.Project__C = objProject.ID;
+              try
+              {
+                //objCase.Project_Owner_Email__c = objProject.Contact__r.email;
+                //objCase.Team_Lead_Email_Id__c = objProject.Tech_Lead__r.email;
+                //this is now being handled in before insert trigger.
+              }
+              catch(exception e)
+              {
+
+
+              }
+
+            }
+            else
+            {
+              //objProject = new Project__c();
+              //objProject.Name = domainName[1].split('\\.') [0];
+              //insert objProject;
+            }
+            system.debug('strMasterEmailBody ' + strMasterEmailBody);
+            System.debug('@@@Email envelope' + envelope);
+            System.debug('@@@Email Replu to' + email.inReplyTo);
+            System.debug('@@@Email Replu to' + email.messageId);
+            Contact objContact;
+            TRY {
+
+              objContact = [select name, Phone from Contact where email = :email.FromAddress limit 1];
+              objCase.Contact__c = objContact.id;
+            }
+            CATCH(EXCEPTION E) {
+              // contact must be created if it is not present for sending emails
+              //objContact=new contact();
+              //id contactRecordTypeId = common.GetRecordTypeId('Contact', 'Customer');
+              //objContact.RecordType = [select Id from RecordType where Id = :contactRecordTypeId];
+              //objContact.Emp_ID__c='00';
+              //objContact.email=email.FromAddress ;
+              //objContact.FirstName=email.fromName.split('\\s') [0];
+              //objContact.LastName=email.fromName.split('\\s') [1];
+              //insert objContact;
+
+            }
+
+            objCase.Priority__c = 'Priority 3';
+            objCase.Sevirity__c = 'Medium';
+            objCase.Resolver_Group__c = 'Support Desk';
+            id recordTypeId = common.GetRecordTypeId('Case__c', 'Incident');
+            objCase.RecordType = [select Id from RecordType where Id = :recordTypeId];
+            objCase.Description__c = strMasterEmailBody;
+            objCase.Subject__c = strSubject;
+            objCase.Status_Change_Date__c = System.now();
+            objCase.Contact_email__c = email.FromAddress;
+
+            objCase.HIP__c = 'No';
+            if (email.fromName.indexof(' ') > 0)
+            {
+              objCase.Client_First_Name__c = email.fromName.substring(0, email.fromName.indexof(' ')).toLowerCase();
+              objCase.Client_Last_Name__c = email.fromName.substring(email.fromName.indexof(' ')).toLowerCase();
+              objCase.Client_First_Name__c = objCase.Client_First_Name__c.capitalize();
+              objCase.Client_Last_Name__c = objCase.Client_Last_Name__c.capitalize();
+            }
+            else
+            {
+              objCase.Client_First_Name__c = email.fromName;
+            }
+
+
+            System.debug('domainName' + domainName);
+            objCase.Status__c = 'New';
+            objCase.Case_Origin__c = 'Email';
+            string clientMailedTo;
+            // changes addeed in v1.2 for multiple email id of support 
+            //as to-Emailaddress is a list of email, we need to find address which is configured in orgwide email
+            list<OrgWideEmailAddress> listOrgWideEmailAddress = [select id, Address from OrgWideEmailAddress];
+            System.debug('OrgWideEmailAddress::' + listOrgWideEmailAddress);
+            for (OrgWideEmailAddress orgAddress : listOrgWideEmailAddress)
+            {
+              for (string fromemail : email.toAddresses)
+              {
+                if (fromemail.contains(orgAddress.address))
+                {
+                  objCase.Email_sent_to__c = fromemail;
+                  break;
+                }
+              }
+            }
+
+
+            insert objCase;
+            //Note attachment = new Note();
+
+            //attachment.ParentId = objCase.ID;
+            //attachment.title = email.Subject;
+            //attachment.Body = email.plainTextBody;
+            //attachment.isPrivate = false;
+            //insert attachment;
+            //attachment.IsNote=true;
+            //try {
+            //Progress_Notes__c objProgressNotes=new Progress_Notes__c();
+            //objProgressNotes.Status__c='Done';
+            //objProgressNotes.Assigned_User__c=objCase.ownerID;
+            //objProgressNotes.Case__c=objCase.Id;
+            //insert objProgressNotes;
+            //}
+            //catch(exception e) {
+            //System.debug('@@Cannot insert Progress Notes'+e);
+
+            //}
+
+            task emailTask = new Task();
+            emailTask.Priority = 'High';
+            emailTask.Status = 'Not Started';
+            emailTask.Subject = 'Mail From Client Subject::' + email.subject;
+            emailTask.WhatID = objCase.Id;
+            emailTask.Description = strTaskEmailBody;
+
+            System.debug('emailTask' + emailTask);
+            if (!Test.isRunningTest())
+            {
+              INSERT emailTask;
+            }
+
+            List<Attachment> attList = new List<Attachment> ();
+            try
+            {
+
+              Attachment Objattachment;
+              Attachment ObjCaseAtt;
+              // This will extract all blob attachments from email
+              // For text type attachment Messaging.Inboundemail.TextAttachment can be used
+              //for (Messaging.Inboundemail.BinaryAttachment file : email.binaryAttachments)
+              if (email.binaryAttachments != null)
+              {
+                integer countBinAtt = email.binaryAttachments.size();
+                For (Integer i = 0; i < countBinAtt; i++)
+                {
+                  Objattachment = new Attachment();
+                  ObjCaseAtt = new Attachment();
+                  Objattachment.Name = email.binaryAttachments[i].fileName;
+                  Objattachment.Body = email.binaryAttachments[i].body;
+                  Objattachment.ParentId = emailTask.ID;
+
+                  ObjCaseAtt.Name = email.binaryAttachments[i].fileName;
+                  ObjCaseAtt.Body = email.binaryAttachments[i].body;
+                  ObjCaseAtt.ParentId = objCase.Id;
+
+                  attList.add(Objattachment);
+                  attList.add(ObjCaseAtt);
+                }
+              }
+
+              //for (Messaging.Inboundemail.textAttachment file : email.TextAttachments)
+              if (email.TextAttachments != null)
+              {
+                integer countTxtAtt = email.TextAttachments.size();
+                For (Integer i = 0; i < countTxtAtt; i++)
+                {
+                  Objattachment = new Attachment();
+                  ObjCaseAtt = new Attachment();
+                  Objattachment.Name = email.binaryAttachments[i].fileName;
+                  Objattachment.Body = blob.valueOf(email.TextAttachments[i].body);
+                  Objattachment.ParentId = emailTask.ID;
+
+                  ObjCaseAtt.Name = email.binaryAttachments[i].fileName;
+                  Objattachment.Body = blob.valueOf(email.TextAttachments[i].body);
+                  ObjCaseAtt.ParentId = objCase.Id;
+
+                  attList.add(Objattachment);
+                  attList.add(ObjCaseAtt);
+                }
+              }
+
+              if (attList.size() > 0)
+              {
+                List<Attachment> caseAttList = new List<Attachment> ();
+                if ((!Test.isRunningTest()))
+                {
+                  insert attList;
+                }
+              }
+            }
+
+            catch(exception e)
+            {
+              System.debug('@@@Attachment failed' + attList);
+              System.debug('@@@reason' + e);
+
+            }
+
+
+            System.debug('!@#$%^&' + emailTask.id);
+          }
+        }
+      }
+      return result;
+  }*/
+  	createNewSaasfocusCase(email.subject, email.fromAddress);
+  	return NULL;//added By chayan
+  }
+
+
+  private boolean CheckEmailLoopingAndSpamming(string fromAddress, string strSubject)
+  {
+/*
+    //added to prevent looping issue for auto responce emails
+    Support_Tool_Settings__c objToolSetting = Support_Tool_Settings__c.getValues('PreventLoop');
+    Boolean returnFlag = true;
+
+    if (objToolSetting.Is_Active__c)
+    {
+
+      Datetime nowTime = System.now();
+      Integer delayMin = Integer.valueOf(objToolSetting.Time_Delay__c);
+      System.debug('====nowTime===' + nowTime);
+      nowTime = nowTime.addMinutes(- delayMin);
+      System.debug('====nowTime===' + nowTime);
+      List<Case__c> objFindRecursiceCase = [select id from Case__c where createddate > :nowTime AND Contact_email__c = :FromAddress limit 1];
+      if (objFindRecursiceCase.size() > 0)
+      {
+        returnFlag = False;
+      }
+      string casePrevent = objToolSetting.Keywords_Prevent_Case_creation__c;
+      list<string> lstcasePreventKeyWord = new list<string> ();
+      try
+      {
+        lstcasePreventKeyWord = casePrevent.split(',', 10000);
+
+        for (Integer i = 0; i < lstcasePreventKeyWord.size(); i++)
+        {
+          if (strSubject.containsIgnoreCase(lstcasePreventKeyWord[0]))
+          {
+            returnFlag = False;
+          }
+        }
+      }
+      catch(exception e)
+      {
+      }
+    }
+
+    return returnFlag;
+}*/
+      
+		return false;//Added by chayan  
+	}
+    //Added by Sahil
+    void createNewSaasfocusCase(String subject, String fromEmail)
+    {
+        Case objCase = createCase();
+        string[] domainName = fromEmail.split('@');
+        Project__c caseProject = [Select Id, Name, (SELECT Id, Name, Case_Status__c FROM Entitlements__r) FROM Project__c where Domain_Names__c like: domainName[1] limit 1];
+        if(caseProject != NULL)
+        {
+			  objCase.Project__c = caseProject.Id;
+              objCase = assignEntitlement(caseProject.Entitlements__r, objCase);
+        }
+        try{
+            System.debug('Inserting case...' + objCase);
+        	insert objCase;    
+        }catch(Exception ex)
+        {
+            System.debug('Exception during case insertion : ' + ex.getMessage());
+        }
+        
+    }
+    Case createCase()
+    {
+        System.debug('creating case...');
+        Case objCase = new Case();
+        objCase.CurrencyIsoCode = 'INR';	//might need to update this based on project location
+        objCase.Status = 'Open';
+        objCase.Origin = 'Email';
+        objCase.Case_Status__c = 'Open';
+        return objCase;
+    }
+    Case assignEntitlement(Entitlement[] objEntitlementList, Case objCase)
+    {
+        for(Entitlement objEntitlement : objEntitlementList)
+        {
+            System.debug('objEntitlement' + objEntitlement.Name);
+            if(objEntitlement.Case_Status__c != NULL && objEntitlement.Case_Status__c.equals('Open'))
+            {
+                System.debug('open entitlement');
+                objCase.EntitlementId = objEntitlement.Id;
+            }
+        }
+        return objCase;
+    }
+}
